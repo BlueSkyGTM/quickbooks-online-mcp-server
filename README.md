@@ -185,6 +185,7 @@ Complete CRUD operations are available for all entity types:
 | `update_invoice` | Update invoice details |
 | `delete_invoice` | Delete/void an invoice |
 | `search_invoices` | Search invoices with filters |
+| `get_invoice_pdf` | Download an invoice as a PDF (inline base64, or to disk when `QBO_PDF_OUTPUT_DIR` is set) |
 
 </details>
 
