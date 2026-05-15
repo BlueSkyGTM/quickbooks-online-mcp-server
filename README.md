@@ -349,32 +349,49 @@ Complete CRUD operations are available for all entity types:
 
 ## Authentication
 
-### Getting QuickBooks API Credentials
+This server uses OAuth 2.0 to authenticate to a QuickBooks Online company. You'll set up an app on the [Intuit Developer Portal](https://developer.intuit.com/) and connect it to either a **sandbox** (for development) or your **production** QBO company.
 
-1. Go to the [Intuit Developer Portal](https://developer.intuit.com/)
-2. Create a new app or select an existing one
-3. Get the **Client ID** and **Client Secret** from the app's keys section
-4. Add `http://localhost:8000/callback` to the app's Redirect URIs
+### Important: Sandbox vs Production
 
-### Option 1: Using Environment Variables (Recommended)
+| Mode | When to use | Redirect URI accepted | Setup difficulty |
+|------|-------------|------------------------|------------------|
+| **Sandbox** | Development, testing, demos | `http://localhost:8000/callback` works | Easy |
+| **Production** | Real company data | Localhost **rejected** — must be a public HTTPS URL | Harder (see below) |
 
-If you have existing tokens:
+If you only want to read your own company's data, you still need to set up an app — Intuit does not offer per-user API keys. There is no shortcut around the OAuth + app-creation flow.
+
+### Sandbox Setup (recommended for first run)
+
+1. Go to the [Intuit Developer Portal](https://developer.intuit.com/) and create a new app
+2. Open the app → **Settings** (left sidebar) → **Redirect URIs** → add: `http://localhost:8000/callback`
+3. Get your **Client ID** and **Client Secret** from the app's **Keys & Credentials** page (Development keys)
+4. Create or use a sandbox company under the **Sandbox** top-level menu item in the dev portal
+5. Set `QUICKBOOKS_ENVIRONMENT=sandbox` in your `.env`
+6. Run `npm run auth` to complete the OAuth handshake — your browser will open, you sign in to the sandbox company, tokens are saved to `.env`
+
+### Production Setup
+
+The Intuit Developer Portal **rejects `http://localhost` redirect URIs in production mode** — every contributor hits this. Two known workarounds:
+
+1. **ngrok tunnel (most common):** run `ngrok http 8000`, then on your Intuit app go to **Settings → Redirect URIs** and add the generated `https://<id>.ngrok-free.app/callback` URL. Use that URL for the OAuth handshake, then revert to localhost afterwards.
+2. **Deploy a small public callback handler** (e.g., on a VPS or serverless function) that captures the auth code and hands it back to your local setup. More involved; only needed if you can't use ngrok.
+
+After completing the production OAuth handshake, the refresh token is what matters — once it's in `.env`, you no longer need the public redirect URL for day-to-day use. Refresh tokens auto-rotate; the server persists the new token on each refresh.
+
+### Once you have tokens
 
 ```env
 QUICKBOOKS_CLIENT_ID=your_client_id
 QUICKBOOKS_CLIENT_SECRET=your_client_secret
 QUICKBOOKS_REFRESH_TOKEN=your_refresh_token
 QUICKBOOKS_REALM_ID=your_realm_id
-QUICKBOOKS_ENVIRONMENT=sandbox
+QUICKBOOKS_ENVIRONMENT=sandbox  # or 'production'
 ```
 
-### Option 2: OAuth Flow
+### Common pitfalls
 
-If you don't have tokens, the server can initiate an OAuth flow that:
-- Starts a temporary local server
-- Opens your browser for authentication
-- Saves tokens to your `.env` file
-- Closes automatically when complete
+- **`.env` loaded from the wrong directory.** The server resolves `.env` relative to the compiled module, not your shell's CWD. If you launch via Claude Desktop, this matters — make sure you're on current `main`.
+- **Redirect URI mismatch.** The URI you register in the Intuit portal must match **exactly** — protocol, host, port, path. `http://localhost:8000/callback` ≠ `http://127.0.0.1:8000/callback`.
 
 ---
 
