@@ -264,16 +264,48 @@ export class QuickbooksClient {
     if (this.refreshToken) updateEnvVar('QUICKBOOKS_REFRESH_TOKEN', this.refreshToken);
     if (this.realmId) updateEnvVar('QUICKBOOKS_REALM_ID', this.realmId);
 
-    // Atomic write: write to a sibling temp file, then rename. On POSIX rename
-    // is atomic within the same filesystem, so a crash mid-write cannot leave
-    // .env half-written or empty.
-    const tmpPath = `${tokenPath}.tmp.${process.pid}`;
+    const newContent = envLines.join('\n');
+    const isSymlink = this.isSymbolicLink(tokenPath);
+
+    if (isSymlink) {
+      // Write directly through the symlink to the real target. Using
+      // rename on a symlink replaces the link itself rather than writing
+      // through it, which breaks persistent-volume mounts in containers.
+      // If the symlink target doesn't exist yet (fresh PVC mount), resolve
+      // the link target without requiring it to exist, then write directly.
+      let realPath: string;
+      try {
+        realPath = fs.realpathSync(tokenPath);
+      } catch (e: any) {
+        if (e?.code === 'ENOENT') {
+          // Dangling symlink: target doesn't exist yet. Read the link target
+          // path and write there directly (creating the file).
+          realPath = fs.readlinkSync(tokenPath);
+        } else {
+          throw e;
+        }
+      }
+      fs.writeFileSync(realPath, newContent, { mode: 0o600 });
+    } else {
+      // Atomic write: write to a sibling temp file, then rename. On POSIX
+      // rename is atomic within the same filesystem, so a crash mid-write
+      // cannot leave .env half-written or empty.
+      const tmpPath = `${tokenPath}.tmp.${process.pid}`;
+      try {
+        fs.writeFileSync(tmpPath, newContent, { mode: 0o600 });
+        fs.renameSync(tmpPath, tokenPath);
+      } catch (err) {
+        try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
+        throw err;
+      }
+    }
+  }
+
+  private isSymbolicLink(filePath: string): boolean {
     try {
-      fs.writeFileSync(tmpPath, envLines.join('\n'), { mode: 0o600 });
-      fs.renameSync(tmpPath, tokenPath);
-    } catch (err) {
-      try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
-      throw err;
+      return fs.lstatSync(filePath).isSymbolicLink();
+    } catch {
+      return false;
     }
   }
 
