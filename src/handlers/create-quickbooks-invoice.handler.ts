@@ -13,6 +13,10 @@ export interface CreateInvoiceInput {
   }>;
   doc_number?: string;
   txn_date?: string; // YYYY-MM-DD
+  linked_txn?: Array<{
+    txn_id: string;
+    txn_type: string;
+  }>;
   global_tax_calculation?: "TaxExcluded" | "TaxInclusive" | "NotApplicable";
 }
 
@@ -75,6 +79,12 @@ export async function createQuickbooksInvoice(data: CreateInvoiceInput): Promise
       })),
       DocNumber: data.doc_number,
       TxnDate: data.txn_date,
+      ...(data.linked_txn && {
+        LinkedTxn: data.linked_txn.map((lt) => ({
+          TxnId: lt.txn_id,
+          TxnType: lt.txn_type,
+        })),
+      }),
     };
 
     if (data.global_tax_calculation) {
