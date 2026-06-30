@@ -10,6 +10,7 @@ export interface CreateInvoiceInput {
     unit_price: number;
     description?: string;
     tax_code_ref?: string; // TaxCode id (non-US) or TAX/NON (US)
+    service_date?: string; // YYYY-MM-DD, per-line ServiceDate
   }>;
   doc_number?: string;
   txn_date?: string; // YYYY-MM-DD
@@ -18,6 +19,9 @@ export interface CreateInvoiceInput {
     txn_type: string;
   }>;
   global_tax_calculation?: "TaxExcluded" | "TaxInclusive" | "NotApplicable";
+  customer_memo?: string; // CustomerMemo (customer-facing message)
+  sales_term_ref?: string; // SalesTerm id; falls back to customer default
+  bill_email?: string; // BillEmail address; falls back to customer default
 }
 
 // Primitive field type map (based on Quickbooks Invoice entity reference docs)
@@ -75,6 +79,7 @@ export async function createQuickbooksInvoice(data: CreateInvoiceInput): Promise
           Qty: l.qty,
           UnitPrice: l.unit_price,
           TaxCodeRef: l.tax_code_ref ? { value: l.tax_code_ref } : undefined,
+          ServiceDate: l.service_date || undefined,
         },
       })),
       DocNumber: data.doc_number,
@@ -85,6 +90,9 @@ export async function createQuickbooksInvoice(data: CreateInvoiceInput): Promise
           TxnType: lt.txn_type,
         })),
       }),
+      ...(data.customer_memo && { CustomerMemo: { value: data.customer_memo } }),
+      ...(data.sales_term_ref && { SalesTermRef: { value: data.sales_term_ref } }),
+      ...(data.bill_email && { BillEmail: { Address: data.bill_email } }),
     };
 
     if (data.global_tax_calculation) {
