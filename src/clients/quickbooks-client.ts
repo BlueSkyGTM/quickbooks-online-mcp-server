@@ -120,6 +120,14 @@ export class QuickbooksClient {
     });
 
     return new Promise((resolve, reject) => {
+      // Guard against duplicate /callback requests for the same authorization
+      // code. Browsers resolve `localhost` to both 127.0.0.1 and ::1, and the
+      // server binds dual-stack (`::`), so the redirect frequently lands twice.
+      // Exchanging a one-time auth code a second time trips Intuit's replay
+      // protection, which REVOKES the tokens issued by the first exchange
+      // (RFC 6749 §4.1.2). Only the first callback may exchange the code.
+      let codeExchangeStarted = false;
+
       // Create temporary server for OAuth callback
       const server = http.createServer(async (req, res) => {
         console.log(`[auth-server] ${req.method} ${req.url}`);
@@ -131,6 +139,17 @@ export class QuickbooksClient {
           res.end('Not Found. Waiting for QuickBooks OAuth callback at /callback');
           return;
         }
+
+        // A duplicate callback for the same code must NOT be exchanged again, or
+        // Intuit revokes the token minted by the first hit. `codeExchangeStarted`
+        // is set synchronously before the first `await`, so the second request's
+        // handler observes it and bails out here.
+        if (codeExchangeStarted) {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end('<html><body style="font-family:Arial;text-align:center;margin-top:20vh"><h2>Processing… you can close this window.</h2></body></html>');
+          return;
+        }
+        codeExchangeStarted = true;
 
         {
           try {
