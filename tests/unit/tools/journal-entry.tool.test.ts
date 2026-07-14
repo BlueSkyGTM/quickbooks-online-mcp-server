@@ -136,4 +136,24 @@ describe('journal entry tool handlers', () => {
 
     expect(result.content[0].text).toContain('Error updating journal entry');
   });
+
+  // Covers the handler's outer catch block: getInstance() itself throwing (e.g. auth
+  // failure) rather than the QBO callback returning an error.
+  it('create handler surfaces an error when getInstance rejects', async () => {
+    (mockQuickbooksClientClass.getInstance as any).mockRejectedValue(new Error('Auth failed'));
+
+    const result = await createHandler({ params: { journalEntry: { Line: balancedLines } } });
+
+    expect(result.content[0].text).toContain('Error creating journal entry');
+    expect(result.content[0].text).toContain('Auth failed');
+  });
+
+  it('update handler surfaces an error when getInstance rejects', async () => {
+    (mockQuickbooksClientClass.getInstance as any).mockRejectedValue(new Error('Auth failed'));
+
+    const result = await updateHandler({ params: { journalEntry: { Id: '5', SyncToken: '0' } } });
+
+    expect(result.content[0].text).toContain('Error updating journal entry');
+    expect(result.content[0].text).toContain('Auth failed');
+  });
 });
