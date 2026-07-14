@@ -108,6 +108,15 @@ describe('Bill Handlers', () => {
   });
 
   describe('updateQuickbooksBill', () => {
+    // Default: company is NOT on Automated Sales Tax (PartnerTaxEnabled absent),
+    // so a dropped line-level TaxCodeRef is treated as real data loss. AST-specific
+    // tests override this per-case.
+    beforeEach(() => {
+      mockQuickBooksInstance.getPreferences.mockImplementation((cb: any) =>
+        cb(null, { TaxPrefs: {} })
+      );
+    });
+
     // A bill whose principal line carries the class + tax tracking that prior
     // schemas silently stripped on update.
     const currentBill = {
@@ -333,6 +342,93 @@ describe('Bill Handlers', () => {
 
       expect(result.isError).toBe(true);
       expect(result.error).toContain('Error: Auth failed');
+    });
+
+    // ── Automated Sales Tax (AST) handling ────────────────────────────────────
+    // Under AST, QBO manages tax centrally and legitimately removes line-level
+    // TaxCodeRef. A dropped TaxCodeRef must be a non-blocking warning, not an error.
+    // A line whose TaxCodeRef QBO strips on the round-trip (no ClassRef involved).
+    const taxOnlyBill = {
+      Id: '1',
+      SyncToken: '5',
+      VendorRef: { value: '56' },
+      Line: [
+        {
+          Id: '1',
+          Amount: 500,
+          DetailType: 'AccountBasedExpenseLineDetail',
+          AccountBasedExpenseLineDetail: { AccountRef: { value: '1' }, TaxCodeRef: { value: 'NON' } },
+        },
+      ],
+    };
+    const taxStrippedBack = {
+      ...taxOnlyBill,
+      SyncToken: '6',
+      Line: [
+        {
+          Id: '1',
+          Amount: 500,
+          DetailType: 'AccountBasedExpenseLineDetail',
+          AccountBasedExpenseLineDetail: { AccountRef: { value: '1' } }, // TaxCodeRef gone
+        },
+      ],
+    };
+
+    it('warns (does not error) when AST is on and QBO drops a TaxCodeRef', async () => {
+      mockQuickBooksInstance.getPreferences.mockImplementation((cb: any) =>
+        cb(null, { TaxPrefs: { PartnerTaxEnabled: true } })
+      );
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, taxOnlyBill));
+      mockQuickBooksInstance.updateBill.mockImplementation((_payload: any, cb: any) => cb(null, taxStrippedBack));
+
+      const result = await updateQuickbooksBill({ Id: '1', PrivateNote: 'x' });
+
+      expect(result.isError).toBe(false);
+      expect((result.result as any)._warning).toContain('Automated Sales Tax');
+      expect((result.result as any)._warning).toContain('Line 1');
+    });
+
+    it('treats PartnerTaxEnabled:false as AST-enabled (attribute present)', async () => {
+      mockQuickBooksInstance.getPreferences.mockImplementation((cb: any) =>
+        cb(null, { TaxPrefs: { PartnerTaxEnabled: false } })
+      );
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, taxOnlyBill));
+      mockQuickBooksInstance.updateBill.mockImplementation((_payload: any, cb: any) => cb(null, taxStrippedBack));
+
+      const result = await updateQuickbooksBill({ Id: '1', PrivateNote: 'x' });
+
+      expect(result.isError).toBe(false);
+      expect((result.result as any)._warning).toContain('Automated Sales Tax');
+    });
+
+    it('still errors on a dropped ClassRef even when AST is on', async () => {
+      mockQuickBooksInstance.getPreferences.mockImplementation((cb: any) =>
+        cb(null, { TaxPrefs: { PartnerTaxEnabled: true } })
+      );
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, currentBill));
+      // ClassRef dropped, TaxCodeRef also dropped — only ClassRef should error under AST.
+      const wiped = { ...currentBill, Line: [{ Id: '1', Amount: 500, DetailType: 'AccountBasedExpenseLineDetail', AccountBasedExpenseLineDetail: { AccountRef: { value: '1' } } }] };
+      mockQuickBooksInstance.updateBill.mockImplementation((_payload: any, cb: any) => cb(null, wiped));
+
+      const result = await updateQuickbooksBill({ Id: '1', PrivateNote: 'x' });
+
+      expect(result.isError).toBe(true);
+      expect(result.error).toContain('ClassRef');
+      expect(result.error).not.toContain('TaxCodeRef'); // suppressed under AST
+    });
+
+    it('surfaces an error if reading Preferences fails', async () => {
+      // Preferences is only read when a TaxCodeRef was actually dropped, so drive that path.
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, taxOnlyBill));
+      mockQuickBooksInstance.updateBill.mockImplementation((_payload: any, cb: any) => cb(null, taxStrippedBack));
+      mockQuickBooksInstance.getPreferences.mockImplementation((cb: any) =>
+        cb(new Error('Preferences read failed'), null)
+      );
+
+      const result = await updateQuickbooksBill({ Id: '1', PrivateNote: 'x' });
+
+      expect(result.isError).toBe(true);
+      expect(result.error).toContain('Preferences read failed');
     });
   });
 
