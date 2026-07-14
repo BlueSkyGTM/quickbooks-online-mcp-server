@@ -6,7 +6,10 @@ import { z } from "zod";
 const toolName = "update_journal_entry";
 const toolDescription = "Update a journal entry in QuickBooks Online.";
 
-// Define the expected input schema for updating a journal entry
+// Define the expected input schema for updating a journal entry.
+// .passthrough() forwards valid-but-unmodeled QBO fields (Entity, Adjustment,
+// CurrencyRef/ExchangeRate, TxnTaxDetail, custom fields) instead of stripping
+// them.
 const toolSchema = z.object({
   journalEntry: z.object({
     Id: z.string().describe("The journal entry ID to update"),
@@ -34,9 +37,9 @@ const toolSchema = z.object({
           value: z.string(),
           name: z.string().optional(),
         }).optional(),
-      }),
-    })).optional(),
-  }),
+      }).passthrough(),
+    }).passthrough()).optional(),
+  }).passthrough(),
 });
 
 type ToolParams = z.infer<typeof toolSchema>;

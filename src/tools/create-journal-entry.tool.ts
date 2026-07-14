@@ -6,7 +6,11 @@ import { z } from "zod";
 const toolName = "create_journal_entry";
 const toolDescription = "Create a journal entry in QuickBooks Online. Description goes on the Line level, not inside JournalEntryLineDetail.";
 
-// Define the expected input schema for creating a journal entry
+// Define the expected input schema for creating a journal entry.
+// .passthrough() is used on the object levels so valid QBO fields that aren't
+// explicitly modeled here (e.g. Entity for A/R+A/P lines, Adjustment,
+// CurrencyRef/ExchangeRate, TxnTaxDetail, custom fields) are forwarded to the
+// API instead of being silently stripped. Mirrors create-bill.tool.ts.
 const toolSchema = z.object({
   journalEntry: z.object({
     TxnDate: z.string().describe("Transaction date in YYYY-MM-DD format"),
@@ -30,9 +34,9 @@ const toolSchema = z.object({
           value: z.string(),
           name: z.string().optional(),
         }).optional(),
-      }),
-    })),
-  }),
+      }).passthrough(),
+    }).passthrough()),
+  }).passthrough(),
 });
 
 type ToolParams = z.infer<typeof toolSchema>;
