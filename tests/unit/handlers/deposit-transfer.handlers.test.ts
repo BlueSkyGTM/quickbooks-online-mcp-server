@@ -225,6 +225,30 @@ describe('Deposit and Transfer Handlers', () => {
       expect(result.isError).toBe(false);
     });
 
+    it('should pass date filters in the array/operator format node-quickbooks parses', async () => {
+      // Regression guard for the silently-ignored date filter bug: node-quickbooks
+      // builds its WHERE clause from an array of { field, value, operator } objects
+      // (module.criteriaToString -> `field operator value`). The old MongoDB-style
+      // { TxnDate: { $gte } } had no `field`/`operator` keys and was dropped, so
+      // date ranges were ignored. Assert the exact criteria shape reaching the lib.
+      let captured: any;
+      mockQuickBooksInstance.findDeposits.mockImplementation((criteria: any, cb: any) => {
+        captured = criteria;
+        cb(null, { QueryResponse: { Deposit: [] } });
+      });
+
+      await searchQuickbooksDeposits({ txn_date_from: '2024-01-01', txn_date_to: '2024-12-31', limit: 50 });
+
+      expect(Array.isArray(captured)).toBe(true);
+      expect(captured).toEqual(expect.arrayContaining([
+        { field: 'TxnDate', value: '2024-01-01', operator: '>=' },
+        { field: 'TxnDate', value: '2024-12-31', operator: '<=' },
+        { field: 'limit', value: 50 },
+      ]));
+      // No MongoDB-style operators should survive.
+      expect(JSON.stringify(captured)).not.toMatch(/\$gte|\$lte/);
+    });
+
     it('should handle empty QueryResponse', async () => {
       mockQuickBooksInstance.findDeposits.mockImplementation((criteria: any, cb: any) =>
         cb(null, { QueryResponse: {} })
@@ -406,6 +430,24 @@ describe('Deposit and Transfer Handlers', () => {
       });
 
       expect(result.isError).toBe(false);
+    });
+
+    it('should pass date filters in the array/operator format node-quickbooks parses', async () => {
+      let captured: any;
+      mockQuickBooksInstance.findTransfers.mockImplementation((criteria: any, cb: any) => {
+        captured = criteria;
+        cb(null, { QueryResponse: { Transfer: [] } });
+      });
+
+      await searchQuickbooksTransfers({ txn_date_from: '2024-01-01', txn_date_to: '2024-12-31', limit: 50 });
+
+      expect(Array.isArray(captured)).toBe(true);
+      expect(captured).toEqual(expect.arrayContaining([
+        { field: 'TxnDate', value: '2024-01-01', operator: '>=' },
+        { field: 'TxnDate', value: '2024-12-31', operator: '<=' },
+        { field: 'limit', value: 50 },
+      ]));
+      expect(JSON.stringify(captured)).not.toMatch(/\$gte|\$lte/);
     });
 
     it('should handle empty QueryResponse', async () => {
