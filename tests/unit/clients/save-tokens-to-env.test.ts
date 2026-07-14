@@ -25,6 +25,8 @@ let lstatBehavior: 'regular' | 'symlink' | 'throws' = 'regular';
 let realpathBehavior: 'ok' | 'enoent' | 'eacces' = 'ok';
 const REAL_PATH = '/persistent-volume/.env';
 const LINK_TARGET = '/fresh-pvc/.env';
+// Configurable readlinkSync return so tests can exercise absolute vs relative targets.
+let readlinkTarget: string = LINK_TARGET;
 
 const writeFileSyncSpy = jest.fn<(p: string, data: string, options?: any) => void>();
 const renameSyncSpy = jest.fn<(o: string, n: string) => void>();
@@ -46,7 +48,7 @@ jest.unstable_mockModule('fs', () => ({
       if (realpathBehavior === 'eacces') throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
       return REAL_PATH;
     }),
-    readlinkSync: jest.fn(() => LINK_TARGET),
+    readlinkSync: jest.fn(() => readlinkTarget),
   },
 }));
 
@@ -92,6 +94,7 @@ describe('saveTokensToEnv (via authenticate)', () => {
     unlinkSyncSpy.mockClear();
     lstatBehavior = 'regular';
     realpathBehavior = 'ok';
+    readlinkTarget = LINK_TARGET;
     tokenCounter++;
     refreshDispatch.mockResolvedValue({
       token: {
@@ -132,9 +135,10 @@ describe('saveTokensToEnv (via authenticate)', () => {
     );
   });
 
-  it('handles dangling symlink via readlinkSync fallback', async () => {
+  it('handles dangling symlink with an ABSOLUTE target via readlinkSync fallback', async () => {
     lstatBehavior = 'symlink';
     realpathBehavior = 'enoent';
+    readlinkTarget = LINK_TARGET; // absolute — used as-is
 
     await quickbooksClient.authenticate();
 
@@ -144,6 +148,25 @@ describe('saveTokensToEnv (via authenticate)', () => {
       expect.stringContaining(`QUICKBOOKS_REFRESH_TOKEN=rotated-${tokenCounter}`),
       expect.objectContaining({ mode: 0o600 }),
     );
+  });
+
+  it('resolves a RELATIVE dangling-symlink target against the link directory', async () => {
+    lstatBehavior = 'symlink';
+    realpathBehavior = 'enoent';
+    // readlinkSync returns a relative target (as stored). It must be resolved
+    // against the symlink's own directory, NOT the process cwd.
+    readlinkTarget = '../data/.env';
+
+    await quickbooksClient.authenticate();
+
+    expect(renameSyncSpy).not.toHaveBeenCalled();
+    // tokenPath is <install>/.env; dirname is <install>; ../data/.env resolves to
+    // <install>/../data/.env. Assert the written path ends with the resolved suffix
+    // and is absolute (not the bare relative string, and not cwd-relative).
+    const writtenPath = writeFileSyncSpy.mock.calls[writeFileSyncSpy.mock.calls.length - 1][0] as string;
+    expect(writtenPath).not.toBe('../data/.env'); // not written verbatim
+    expect(writtenPath.startsWith('/')).toBe(true); // absolute
+    expect(writtenPath.endsWith('/data/.env')).toBe(true); // resolved to link dir's sibling
   });
 
   it('falls back to atomic rename when lstatSync throws (isSymbolicLink fails closed)', async () => {

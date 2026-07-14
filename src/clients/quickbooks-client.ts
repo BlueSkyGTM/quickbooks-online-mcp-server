@@ -278,13 +278,22 @@ export class QuickbooksClient {
         realPath = fs.realpathSync(tokenPath);
       } catch (e: any) {
         if (e?.code === 'ENOENT') {
-          // Dangling symlink: target doesn't exist yet. Read the link target
-          // path and write there directly (creating the file).
-          realPath = fs.readlinkSync(tokenPath);
+          // Dangling symlink: target doesn't exist yet. readlinkSync returns the
+          // link target as stored, which may be RELATIVE — and a relative path is
+          // resolved against the process cwd, not the link's own directory. Resolve
+          // it against the symlink's directory so we write to the intended location.
+          const linkTarget = fs.readlinkSync(tokenPath);
+          realPath = path.isAbsolute(linkTarget)
+            ? linkTarget
+            : path.resolve(path.dirname(tokenPath), linkTarget);
         } else {
           throw e;
         }
       }
+      // Deliberate: no temp-file+rename here. Renaming over a symlink replaces the
+      // link itself (the bug this branch fixes), so we write through to the target
+      // directly. This trades atomicity for correct persistent-volume behavior — a
+      // crash mid-write could leave the target .env partially written.
       fs.writeFileSync(realPath, newContent, { mode: 0o600 });
     } else {
       // Atomic write: write to a sibling temp file, then rename. On POSIX
