@@ -264,16 +264,57 @@ export class QuickbooksClient {
     if (this.refreshToken) updateEnvVar('QUICKBOOKS_REFRESH_TOKEN', this.refreshToken);
     if (this.realmId) updateEnvVar('QUICKBOOKS_REALM_ID', this.realmId);
 
-    // Atomic write: write to a sibling temp file, then rename. On POSIX rename
-    // is atomic within the same filesystem, so a crash mid-write cannot leave
-    // .env half-written or empty.
-    const tmpPath = `${tokenPath}.tmp.${process.pid}`;
+    const newContent = envLines.join('\n');
+    const isSymlink = this.isSymbolicLink(tokenPath);
+
+    if (isSymlink) {
+      // Write directly through the symlink to the real target. Using
+      // rename on a symlink replaces the link itself rather than writing
+      // through it, which breaks persistent-volume mounts in containers.
+      // If the symlink target doesn't exist yet (fresh PVC mount), resolve
+      // the link target without requiring it to exist, then write directly.
+      let realPath: string;
+      try {
+        realPath = fs.realpathSync(tokenPath);
+      } catch (e: any) {
+        if (e?.code === 'ENOENT') {
+          // Dangling symlink: target doesn't exist yet. readlinkSync returns the
+          // link target as stored, which may be RELATIVE — and a relative path is
+          // resolved against the process cwd, not the link's own directory. Resolve
+          // it against the symlink's directory so we write to the intended location.
+          const linkTarget = fs.readlinkSync(tokenPath);
+          realPath = path.isAbsolute(linkTarget)
+            ? linkTarget
+            : path.resolve(path.dirname(tokenPath), linkTarget);
+        } else {
+          throw e;
+        }
+      }
+      // Deliberate: no temp-file+rename here. Renaming over a symlink replaces the
+      // link itself (the bug this branch fixes), so we write through to the target
+      // directly. This trades atomicity for correct persistent-volume behavior — a
+      // crash mid-write could leave the target .env partially written.
+      fs.writeFileSync(realPath, newContent, { mode: 0o600 });
+    } else {
+      // Atomic write: write to a sibling temp file, then rename. On POSIX
+      // rename is atomic within the same filesystem, so a crash mid-write
+      // cannot leave .env half-written or empty.
+      const tmpPath = `${tokenPath}.tmp.${process.pid}`;
+      try {
+        fs.writeFileSync(tmpPath, newContent, { mode: 0o600 });
+        fs.renameSync(tmpPath, tokenPath);
+      } catch (err) {
+        try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
+        throw err;
+      }
+    }
+  }
+
+  private isSymbolicLink(filePath: string): boolean {
     try {
-      fs.writeFileSync(tmpPath, envLines.join('\n'), { mode: 0o600 });
-      fs.renameSync(tmpPath, tokenPath);
-    } catch (err) {
-      try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
-      throw err;
+      return fs.lstatSync(filePath).isSymbolicLink();
+    } catch {
+      return false;
     }
   }
 
