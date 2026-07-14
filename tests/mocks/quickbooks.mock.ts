@@ -34,6 +34,7 @@ export const mockQuickBooksInstance = {
   updateBill: jest.fn(),
   deleteBill: jest.fn(),
   findBills: jest.fn(),
+  getPreferences: jest.fn(),
 
   // Vendor methods
   createVendor: jest.fn(),

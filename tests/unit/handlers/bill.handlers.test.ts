@@ -108,22 +108,229 @@ describe('Bill Handlers', () => {
   });
 
   describe('updateQuickbooksBill', () => {
-    it('should update a bill', async () => {
-      const mockUpdated = { Id: '1', TotalAmt: 750, SyncToken: '1' };
-      mockQuickBooksInstance.updateBill.mockImplementation((_payload: any, cb: any) => cb(null, mockUpdated));
+    // Default: company is NOT on Automated Sales Tax (PartnerTaxEnabled absent),
+    // so a dropped line-level TaxCodeRef is treated as real data loss. AST-specific
+    // tests override this per-case.
+    beforeEach(() => {
+      mockQuickBooksInstance.getPreferences.mockImplementation((cb: any) =>
+        cb(null, { TaxPrefs: {} })
+      );
+    });
 
-      const result = await updateQuickbooksBill({ Id: '1', SyncToken: '0', TotalAmt: 750 });
+    // A bill whose principal line carries the class + tax tracking that prior
+    // schemas silently stripped on update.
+    const currentBill = {
+      Id: '1',
+      SyncToken: '5',
+      VendorRef: { value: '56' },
+      Line: [
+        {
+          Id: '1',
+          Amount: 500,
+          DetailType: 'AccountBasedExpenseLineDetail',
+          AccountBasedExpenseLineDetail: {
+            AccountRef: { value: '1' },
+            ClassRef: { value: '100', name: '5614' },
+            TaxCodeRef: { value: 'NON' },
+          },
+        },
+      ],
+    };
+
+    it('should update a bill via read-merge-write', async () => {
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, currentBill));
+      const updated = { ...currentBill, SyncToken: '6' };
+      mockQuickBooksInstance.updateBill.mockImplementation((_payload: any, cb: any) => cb(null, updated));
+
+      const result = await updateQuickbooksBill({ Id: '1', DueDate: '2026-05-10' });
 
       expect(result.isError).toBe(false);
-      expect(result.result).toEqual(mockUpdated);
+      expect(result.result).toEqual(updated);
+    });
+
+    it('should preserve ClassRef/TaxCodeRef when the caller omits them', async () => {
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, currentBill));
+      let sentPayload: any;
+      mockQuickBooksInstance.updateBill.mockImplementation((payload: any, cb: any) => {
+        sentPayload = payload;
+        cb(null, payload); // QBO echoes back the saved object
+      });
+
+      // The bug repro: caller supplies a line WITHOUT ClassRef/TaxCodeRef.
+      const result = await updateQuickbooksBill({
+        Id: '1',
+        Line: [
+          {
+            Id: '1',
+            Amount: 600,
+            DetailType: 'AccountBasedExpenseLineDetail',
+            AccountBasedExpenseLineDetail: { AccountRef: { value: '1' } },
+          },
+        ],
+      });
+
+      expect(result.isError).toBe(false);
+      // Class + tax survived the merge into the outbound payload...
+      expect(sentPayload.Line[0].AccountBasedExpenseLineDetail.ClassRef).toEqual({ value: '100', name: '5614' });
+      expect(sentPayload.Line[0].AccountBasedExpenseLineDetail.TaxCodeRef).toEqual({ value: 'NON' });
+      // ...while the caller's amount change applied...
+      expect(sentPayload.Line[0].Amount).toBe(600);
+      // ...and the freshest SyncToken was used, not the caller's.
+      expect(sentPayload.SyncToken).toBe('5');
+    });
+
+    it('should let the caller explicitly override an existing ClassRef', async () => {
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, currentBill));
+      let sentPayload: any;
+      mockQuickBooksInstance.updateBill.mockImplementation((payload: any, cb: any) => {
+        sentPayload = payload;
+        cb(null, payload);
+      });
+
+      await updateQuickbooksBill({
+        Id: '1',
+        Line: [
+          {
+            Id: '1',
+            AccountBasedExpenseLineDetail: { ClassRef: { value: '200', name: '179' } },
+          },
+        ],
+      });
+
+      expect(sentPayload.Line[0].AccountBasedExpenseLineDetail.ClassRef).toEqual({ value: '200', name: '179' });
+      // AccountRef from current is still preserved through the override.
+      expect(sentPayload.Line[0].AccountBasedExpenseLineDetail.AccountRef).toEqual({ value: '1' });
+    });
+
+    it('should error if QuickBooks drops a ClassRef on the round-trip', async () => {
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, currentBill));
+      const strippedBack = {
+        ...currentBill,
+        SyncToken: '6',
+        Line: [
+          {
+            Id: '1',
+            Amount: 500,
+            DetailType: 'AccountBasedExpenseLineDetail',
+            AccountBasedExpenseLineDetail: { AccountRef: { value: '1' }, TaxCodeRef: { value: 'NON' } },
+          },
+        ],
+      };
+      mockQuickBooksInstance.updateBill.mockImplementation((_payload: any, cb: any) => cb(null, strippedBack));
+
+      const result = await updateQuickbooksBill({ Id: '1', DueDate: '2026-05-10' });
+
+      expect(result.isError).toBe(true);
+      expect(result.error).toContain('ClassRef');
+    });
+
+    it('should add a new line (no Id) without disturbing existing classed lines', async () => {
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, currentBill));
+      let sentPayload: any;
+      mockQuickBooksInstance.updateBill.mockImplementation((payload: any, cb: any) => {
+        sentPayload = payload;
+        cb(null, payload);
+      });
+
+      await updateQuickbooksBill({
+        Id: '1',
+        Line: [
+          // existing classed line, re-supplied by Id
+          { Id: '1', AccountBasedExpenseLineDetail: { AccountRef: { value: '1' } } },
+          // brand-new interest line (no Id) — passes through as authored
+          {
+            Amount: 112.04,
+            DetailType: 'AccountBasedExpenseLineDetail',
+            Description: 'interest',
+            AccountBasedExpenseLineDetail: { AccountRef: { value: '184' }, ClassRef: { value: '100', name: '5614' } },
+          },
+        ],
+      });
+
+      // existing line kept its class via merge
+      expect(sentPayload.Line[0].AccountBasedExpenseLineDetail.ClassRef).toEqual({ value: '100', name: '5614' });
+      // new line preserved exactly as authored
+      expect(sentPayload.Line[1].Amount).toBe(112.04);
+      expect(sentPayload.Line[1].AccountBasedExpenseLineDetail.ClassRef).toEqual({ value: '100', name: '5614' });
+    });
+
+    it('should perform a header-only update without touching the line array', async () => {
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, currentBill));
+      let sentPayload: any;
+      mockQuickBooksInstance.updateBill.mockImplementation((payload: any, cb: any) => {
+        sentPayload = payload;
+        cb(null, payload);
+      });
+
+      const result = await updateQuickbooksBill({ Id: '1', PrivateNote: 'paid 2026-06-24' });
+
+      expect(result.isError).toBe(false);
+      expect(sentPayload.PrivateNote).toBe('paid 2026-06-24');
+      // lines carried over verbatim, class intact
+      expect(sentPayload.Line).toEqual(currentBill.Line);
+    });
+
+    it('should not flag a line the caller intentionally removed', async () => {
+      const twoLine = {
+        ...currentBill,
+        Line: [
+          currentBill.Line[0],
+          { Id: '2', Amount: 50, DetailType: 'AccountBasedExpenseLineDetail', AccountBasedExpenseLineDetail: { AccountRef: { value: '9' }, ClassRef: { value: '100' } } },
+        ],
+      };
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, twoLine));
+      // caller resubmits only line 1; QBO returns a bill with line 2 gone
+      mockQuickBooksInstance.updateBill.mockImplementation((payload: any, cb: any) => cb(null, payload));
+
+      const result = await updateQuickbooksBill({
+        Id: '1',
+        Line: [{ Id: '1', AccountBasedExpenseLineDetail: { AccountRef: { value: '1' } } }],
+      });
+
+      expect(result.isError).toBe(false); // dropping line 2 was intentional, not a regression
+    });
+
+    it('should error if the whole line detail is dropped on the round-trip', async () => {
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, currentBill));
+      // updated line lost its entire AccountBasedExpenseLineDetail
+      const wiped = { ...currentBill, Line: [{ Id: '1', Amount: 500, DetailType: 'AccountBasedExpenseLineDetail' }] };
+      mockQuickBooksInstance.updateBill.mockImplementation((_payload: any, cb: any) => cb(null, wiped));
+
+      const result = await updateQuickbooksBill({ Id: '1', PrivateNote: 'x' });
+
+      expect(result.isError).toBe(true);
+      expect(result.error).toContain('ClassRef');
+      expect(result.error).toContain('TaxCodeRef');
+    });
+
+    it('should require bill.Id', async () => {
+      const missingId = await updateQuickbooksBill({ DueDate: '2026-05-10' });
+      expect(missingId.isError).toBe(true);
+      expect(missingId.error).toContain('Id');
+
+      const noBill = await updateQuickbooksBill(undefined as any);
+      expect(noBill.isError).toBe(true);
+      expect(noBill.error).toContain('Id');
+    });
+
+    it('should surface an error if the initial read fails', async () => {
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) =>
+        cb(new Error('Bill 1 not found'), null)
+      );
+
+      const result = await updateQuickbooksBill({ Id: '1', PrivateNote: 'x' });
+
+      expect(result.isError).toBe(true);
+      expect(result.error).toContain('not found');
     });
 
     it('should handle API errors', async () => {
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, currentBill));
       mockQuickBooksInstance.updateBill.mockImplementation((_payload: any, cb: any) =>
         cb(new Error('Update failed'), null)
       );
 
-      const result = await updateQuickbooksBill({ Id: '1', SyncToken: '0' });
+      const result = await updateQuickbooksBill({ Id: '1' });
 
       expect(result.isError).toBe(true);
     });
@@ -131,10 +338,97 @@ describe('Bill Handlers', () => {
     it('should handle authentication errors', async () => {
       (mockQuickbooksClientClass.getInstance as any).mockRejectedValue(new Error('Auth failed'));
 
-      const result = await updateQuickbooksBill({ Id: '1', SyncToken: '0' });
+      const result = await updateQuickbooksBill({ Id: '1' });
 
       expect(result.isError).toBe(true);
       expect(result.error).toContain('Error: Auth failed');
+    });
+
+    // ── Automated Sales Tax (AST) handling ────────────────────────────────────
+    // Under AST, QBO manages tax centrally and legitimately removes line-level
+    // TaxCodeRef. A dropped TaxCodeRef must be a non-blocking warning, not an error.
+    // A line whose TaxCodeRef QBO strips on the round-trip (no ClassRef involved).
+    const taxOnlyBill = {
+      Id: '1',
+      SyncToken: '5',
+      VendorRef: { value: '56' },
+      Line: [
+        {
+          Id: '1',
+          Amount: 500,
+          DetailType: 'AccountBasedExpenseLineDetail',
+          AccountBasedExpenseLineDetail: { AccountRef: { value: '1' }, TaxCodeRef: { value: 'NON' } },
+        },
+      ],
+    };
+    const taxStrippedBack = {
+      ...taxOnlyBill,
+      SyncToken: '6',
+      Line: [
+        {
+          Id: '1',
+          Amount: 500,
+          DetailType: 'AccountBasedExpenseLineDetail',
+          AccountBasedExpenseLineDetail: { AccountRef: { value: '1' } }, // TaxCodeRef gone
+        },
+      ],
+    };
+
+    it('warns (does not error) when AST is on and QBO drops a TaxCodeRef', async () => {
+      mockQuickBooksInstance.getPreferences.mockImplementation((cb: any) =>
+        cb(null, { TaxPrefs: { PartnerTaxEnabled: true } })
+      );
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, taxOnlyBill));
+      mockQuickBooksInstance.updateBill.mockImplementation((_payload: any, cb: any) => cb(null, taxStrippedBack));
+
+      const result = await updateQuickbooksBill({ Id: '1', PrivateNote: 'x' });
+
+      expect(result.isError).toBe(false);
+      expect((result.result as any)._warning).toContain('Automated Sales Tax');
+      expect((result.result as any)._warning).toContain('Line 1');
+    });
+
+    it('treats PartnerTaxEnabled:false as AST-enabled (attribute present)', async () => {
+      mockQuickBooksInstance.getPreferences.mockImplementation((cb: any) =>
+        cb(null, { TaxPrefs: { PartnerTaxEnabled: false } })
+      );
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, taxOnlyBill));
+      mockQuickBooksInstance.updateBill.mockImplementation((_payload: any, cb: any) => cb(null, taxStrippedBack));
+
+      const result = await updateQuickbooksBill({ Id: '1', PrivateNote: 'x' });
+
+      expect(result.isError).toBe(false);
+      expect((result.result as any)._warning).toContain('Automated Sales Tax');
+    });
+
+    it('still errors on a dropped ClassRef even when AST is on', async () => {
+      mockQuickBooksInstance.getPreferences.mockImplementation((cb: any) =>
+        cb(null, { TaxPrefs: { PartnerTaxEnabled: true } })
+      );
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, currentBill));
+      // ClassRef dropped, TaxCodeRef also dropped — only ClassRef should error under AST.
+      const wiped = { ...currentBill, Line: [{ Id: '1', Amount: 500, DetailType: 'AccountBasedExpenseLineDetail', AccountBasedExpenseLineDetail: { AccountRef: { value: '1' } } }] };
+      mockQuickBooksInstance.updateBill.mockImplementation((_payload: any, cb: any) => cb(null, wiped));
+
+      const result = await updateQuickbooksBill({ Id: '1', PrivateNote: 'x' });
+
+      expect(result.isError).toBe(true);
+      expect(result.error).toContain('ClassRef');
+      expect(result.error).not.toContain('TaxCodeRef'); // suppressed under AST
+    });
+
+    it('surfaces an error if reading Preferences fails', async () => {
+      // Preferences is only read when a TaxCodeRef was actually dropped, so drive that path.
+      mockQuickBooksInstance.getBill.mockImplementation((_id: any, cb: any) => cb(null, taxOnlyBill));
+      mockQuickBooksInstance.updateBill.mockImplementation((_payload: any, cb: any) => cb(null, taxStrippedBack));
+      mockQuickBooksInstance.getPreferences.mockImplementation((cb: any) =>
+        cb(new Error('Preferences read failed'), null)
+      );
+
+      const result = await updateQuickbooksBill({ Id: '1', PrivateNote: 'x' });
+
+      expect(result.isError).toBe(true);
+      expect(result.error).toContain('Preferences read failed');
     });
   });
 
