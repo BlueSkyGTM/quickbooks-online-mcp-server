@@ -17,6 +17,11 @@ const lineItemSchema = z.object({
     .describe(
       "Tax code for this line: a TaxCode Id for non-US companies (use search_tax_codes), or 'TAX'/'NON' for US companies"
     ),
+  service_date: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Date the service was performed (YYYY-MM-DD), shown per line on the invoice"),
 });
 
 const linkedTxnSchema = z.object({
@@ -34,6 +39,21 @@ const toolSchema = z.object({
     .enum(["TaxExcluded", "TaxInclusive", "NotApplicable"])
     .optional()
     .describe("Non-US companies only: whether unit prices exclude or include tax"),
+  customer_memo: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Customer-facing message printed on the invoice (QBO CustomerMemo)"),
+  sales_term_ref: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Sales term Id (use search_terms), e.g. Net 30. Falls back to the customer default if omitted"),
+  bill_email: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Billing email address (QBO BillEmail). Falls back to the customer default if omitted"),
 });
 
 const toolHandler = async ({ params }: any) => {
