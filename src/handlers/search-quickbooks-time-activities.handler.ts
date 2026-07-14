@@ -14,13 +14,13 @@ export interface SearchTimeActivitiesInput {
 export async function searchQuickbooksTimeActivities(data: SearchTimeActivitiesInput): Promise<ToolResponse<any>> {
   try {
     const quickbooks = await QuickbooksClient.getInstance();
-    const criteria: Record<string, any> = {};
-    if (data.employee_ref) criteria.EmployeeRef = data.employee_ref;
-    if (data.vendor_ref) criteria.VendorRef = data.vendor_ref;
-    if (data.customer_ref) criteria.CustomerRef = data.customer_ref;
-    if (data.txn_date_from) criteria.TxnDate = { $gte: data.txn_date_from };
-    if (data.txn_date_to) criteria.TxnDate = { ...criteria.TxnDate, $lte: data.txn_date_to };
-    if (data.limit) criteria.limit = data.limit;
+    const criteria: Array<Record<string, any>> = [];
+    if (data.employee_ref) criteria.push({ field: "EmployeeRef", value: data.employee_ref, operator: "=" });
+    if (data.vendor_ref) criteria.push({ field: "VendorRef", value: data.vendor_ref, operator: "=" });
+    if (data.customer_ref) criteria.push({ field: "CustomerRef", value: data.customer_ref, operator: "=" });
+    if (data.txn_date_from) criteria.push({ field: "TxnDate", value: data.txn_date_from, operator: ">=" });
+    if (data.txn_date_to) criteria.push({ field: "TxnDate", value: data.txn_date_to, operator: "<=" });
+    if (data.limit) criteria.push({ field: "limit", value: data.limit });
 
     return new Promise((resolve) => {
       (quickbooks as any).findTimeActivities(criteria, (err: any, result: any) => {

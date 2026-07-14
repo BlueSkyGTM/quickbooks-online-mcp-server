@@ -13,11 +13,11 @@ export async function searchQuickbooksPurchaseOrders(data: SearchPurchaseOrdersI
   try {
     const quickbooks = await QuickbooksClient.getInstance();
 
-    const criteria: Record<string, any> = {};
-    if (data.vendor_ref) criteria.VendorRef = data.vendor_ref;
-    if (data.txn_date_from) criteria.TxnDate = { $gte: data.txn_date_from };
-    if (data.txn_date_to) criteria.TxnDate = { ...criteria.TxnDate, $lte: data.txn_date_to };
-    if (data.limit) criteria.limit = data.limit;
+    const criteria: Array<Record<string, any>> = [];
+    if (data.vendor_ref) criteria.push({ field: "VendorRef", value: data.vendor_ref, operator: "=" });
+    if (data.txn_date_from) criteria.push({ field: "TxnDate", value: data.txn_date_from, operator: ">=" });
+    if (data.txn_date_to) criteria.push({ field: "TxnDate", value: data.txn_date_to, operator: "<=" });
+    if (data.limit) criteria.push({ field: "limit", value: data.limit });
 
     return new Promise((resolve) => {
       (quickbooks as any).findPurchaseOrders(criteria, (err: any, result: any) => {
