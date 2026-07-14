@@ -42,6 +42,18 @@ export default {
       lines: 97,
       statements: 95,
     },
+    // create_account's normalizeAccountPayload carries a scalar field-type-map
+    // switch whose boolean/number/default arms are not reachable from the
+    // public surface (the fixed payload feeds only string fields; the ParentRef
+    // object is attached separately). The behavioral tests cover the reachable
+    // paths (top-level create, sub-account create via parent_id, errors); this
+    // floor accounts for the dead arms.
+    './src/handlers/create-quickbooks-account.handler.ts': {
+      branches: 60,
+      functions: 100,
+      lines: 75,
+      statements: 75,
+    },
   },
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
