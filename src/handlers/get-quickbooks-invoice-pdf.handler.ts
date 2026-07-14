@@ -1,4 +1,4 @@
-import { quickbooksClient } from "../clients/quickbooks-client.js";
+import { QuickbooksClient } from "../clients/quickbooks-client.js";
 import { ToolResponse } from "../types/tool-response.js";
 import { formatError } from "../helpers/format-error.js";
 
@@ -36,8 +36,7 @@ export async function getQuickbooksInvoicePdf(
   invoiceId: string
 ): Promise<ToolResponse<Buffer>> {
   try {
-    await quickbooksClient.authenticate();
-    const quickbooks = quickbooksClient.getQuickbooks();
+    const quickbooks = await QuickbooksClient.getInstance();
 
     return new Promise((resolve) => {
       (quickbooks as any).getInvoicePdf(invoiceId, (err: any, pdf: Buffer) => {

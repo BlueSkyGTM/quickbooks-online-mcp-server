@@ -1,5 +1,5 @@
 import { jest, describe, it, expect, beforeEach, afterEach } from '@jest/globals';
-import { mockQuickbooksClient, mockQuickBooksInstance, resetAllMocks } from '../../mocks/quickbooks.mock';
+import { mockQuickbooksClient, mockQuickbooksClientClass, mockQuickBooksInstance, resetAllMocks } from '../../mocks/quickbooks.mock';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -7,6 +7,7 @@ import path from 'path';
 // ESM-compatible module mocking — must be set up before importing the tool.
 jest.unstable_mockModule('../../../src/clients/quickbooks-client', () => ({
   quickbooksClient: mockQuickbooksClient,
+  QuickbooksClient: mockQuickbooksClientClass,
 }));
 
 const { GetInvoicePdfTool } = await import('../../../src/tools/get-invoice-pdf.tool');

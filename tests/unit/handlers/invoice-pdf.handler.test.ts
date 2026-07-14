@@ -1,9 +1,10 @@
 import { jest, describe, it, expect, beforeEach, afterEach } from '@jest/globals';
-import { mockQuickbooksClient, mockQuickBooksInstance, resetAllMocks } from '../../mocks/quickbooks.mock';
+import { mockQuickbooksClient, mockQuickbooksClientClass, mockQuickBooksInstance, resetAllMocks } from '../../mocks/quickbooks.mock';
 
 // ESM-compatible module mocking
 jest.unstable_mockModule('../../../src/clients/quickbooks-client', () => ({
   quickbooksClient: mockQuickbooksClient,
+  QuickbooksClient: mockQuickbooksClientClass,
 }));
 
 // Dynamic import after mock setup
@@ -57,7 +58,7 @@ describe('getQuickbooksInvoicePdf', () => {
   });
 
   it('returns isError when authentication fails', async () => {
-    (mockQuickbooksClient.authenticate as any).mockRejectedValue(new Error('Auth failed'));
+    (mockQuickbooksClientClass.getInstance as any).mockRejectedValue(new Error('Auth failed'));
 
     const result = await getQuickbooksInvoicePdf('123');
 
