@@ -32,6 +32,16 @@ export default {
       lines: 70,
       statements: 70,
     },
+    // update_account's normalizePatch carries a scalar field-type-map switch
+    // whose `default` arm is unreachable (the map only ever maps to
+    // string/boolean/number). The behavioral tests cover every reachable path;
+    // this floor accounts for that one dead arm.
+    './src/handlers/update-quickbooks-account.handler.ts': {
+      branches: 89,
+      functions: 100,
+      lines: 97,
+      statements: 95,
+    },
   },
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
