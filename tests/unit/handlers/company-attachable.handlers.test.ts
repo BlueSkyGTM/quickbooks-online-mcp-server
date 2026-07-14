@@ -539,6 +539,65 @@ describe('Company and Attachable Handlers', () => {
       expect(result.isError).toBe(true);
       expect(result.error).toContain('Auth failed');
     });
+
+    it('derives FileName and ContentType metadata from file_path when omitted', async () => {
+      let captured: any;
+      mockQuickBooksInstance.updateAttachable.mockImplementation((payload: any, cb: any) => {
+        captured = payload;
+        cb(null, {});
+      });
+
+      const result = await updateQuickbooksAttachable({
+        id: '1',
+        sync_token: '0',
+        file_path: '/tmp/receipts/invoice.pdf',
+      });
+
+      expect(result.isError).toBe(false);
+      // Metadata-only: derived from the path, no disk read / re-upload.
+      expect(captured.FileName).toBe('invoice.pdf');
+      expect(captured.ContentType).toBe('application/pdf');
+    });
+
+    it('prefers explicit file_name/content_type over values derived from file_path', async () => {
+      let captured: any;
+      mockQuickBooksInstance.updateAttachable.mockImplementation((payload: any, cb: any) => {
+        captured = payload;
+        cb(null, {});
+      });
+
+      const result = await updateQuickbooksAttachable({
+        id: '1',
+        sync_token: '0',
+        file_path: '/tmp/receipts/invoice.pdf',
+        file_name: 'custom-name.pdf',
+        content_type: 'text/plain',
+      });
+
+      expect(result.isError).toBe(false);
+      expect(captured.FileName).toBe('custom-name.pdf');
+      expect(captured.ContentType).toBe('text/plain');
+    });
+
+    it('omits ContentType when file_path has no recognizable extension', async () => {
+      let captured: any;
+      mockQuickBooksInstance.updateAttachable.mockImplementation((payload: any, cb: any) => {
+        captured = payload;
+        cb(null, {});
+      });
+
+      const result = await updateQuickbooksAttachable({
+        id: '1',
+        sync_token: '0',
+        file_path: '/tmp/receipts/receipt-no-extension',
+      });
+
+      expect(result.isError).toBe(false);
+      // FileName still derived from the basename; ContentType left unset since
+      // the extension is unknown (inferContentType returns null).
+      expect(captured.FileName).toBe('receipt-no-extension');
+      expect(captured.ContentType).toBeUndefined();
+    });
   });
 
   describe('deleteQuickbooksAttachable', () => {
