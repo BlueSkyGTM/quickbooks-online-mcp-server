@@ -490,6 +490,72 @@ describe('Refund, PurchaseOrder, VendorCredit Handlers', () => {
       expect(result.isError).toBe(false);
     });
 
+    it('should map per-line tax code, class, billable status and global tax calculation like bills do', async () => {
+      // Modeled on the HST ON verification case: 6698.22 @ 13% -> QBO
+      // computes TotalTax 870.77 / TotalAmt 7568.99 from the line tax code.
+      let captured: any;
+      mockQuickBooksInstance.createVendorCredit.mockImplementation((payload: any, cb: any) => {
+        captured = payload;
+        cb(null, {
+          Id: '42',
+          TotalAmt: 7568.99,
+          GlobalTaxCalculation: 'TaxExcluded',
+          TxnTaxDetail: { TotalTax: 870.77 },
+          Line: payload.Line,
+        });
+      });
+
+      const result = await createQuickbooksVendorCredit({
+        vendor_ref: 'vendor-1',
+        line_items: [
+          {
+            amount: 6698.22,
+            description: 'Accrued liability reversal',
+            account_ref: 'acc-accrued-liabilities',
+            class_ref: 'class-7',
+            tax_code_ref: 'H',
+            billable_status: 'NotBillable',
+            customer_ref: 'cust-3',
+          },
+        ],
+        global_tax_calculation: 'TaxExcluded',
+      });
+
+      expect(result.isError).toBe(false);
+      const detail = captured.Line[0].AccountBasedExpenseLineDetail;
+      expect(detail.AccountRef).toEqual({ value: 'acc-accrued-liabilities' });
+      expect(detail.ClassRef).toEqual({ value: 'class-7' });
+      expect(detail.TaxCodeRef).toEqual({ value: 'H' });
+      expect(detail.BillableStatus).toBe('NotBillable');
+      expect(detail.CustomerRef).toEqual({ value: 'cust-3' });
+      expect(captured.GlobalTaxCalculation).toBe('TaxExcluded');
+      // TxnTaxDetail is left to QBO's tax engine — never hardcoded by us.
+      expect(captured.TxnTaxDetail).toBeUndefined();
+      // Read-back assertions per the verification case.
+      expect(result.result.TxnTaxDetail.TotalTax).toBeGreaterThan(0);
+      expect(result.result.TxnTaxDetail.TotalTax).toBe(870.77);
+      expect(result.result.TotalAmt).toBe(7568.99);
+      expect(result.result.GlobalTaxCalculation).toBe('TaxExcluded');
+      expect(result.result.Line[0].AccountBasedExpenseLineDetail.ClassRef).toEqual({ value: 'class-7' });
+    });
+
+    it('should keep legacy simple line items working (no tax/class fields)', async () => {
+      let captured: any;
+      mockQuickBooksInstance.createVendorCredit.mockImplementation((payload: any, cb: any) => {
+        captured = payload;
+        cb(null, { Id: '1' });
+      });
+
+      const result = await createQuickbooksVendorCredit({
+        vendor_ref: 'vendor-1',
+        line_items: [{ amount: 75, description: 'plain', account_ref: 'acc-1' }],
+      });
+
+      expect(result.isError).toBe(false);
+      expect(captured.Line[0].AccountBasedExpenseLineDetail).toEqual({ AccountRef: { value: 'acc-1' } });
+      expect(captured.GlobalTaxCalculation).toBeUndefined();
+    });
+
     it('should create a vendor credit - authentication error', async () => {
       (mockQuickbooksClientClass.getInstance as any).mockRejectedValue(new Error('Auth failed'));
 
@@ -561,6 +627,109 @@ describe('Refund, PurchaseOrder, VendorCredit Handlers', () => {
       });
 
       expect(result.isError).toBe(false);
+    });
+
+    it('should replace lines via full update, preserving unrelated fields and SyncToken', async () => {
+      // QBO rejects sparse updates that replace lines (error 2020: VendorRef
+      // missing) — the handler must read-modify-write the full entity.
+      mockQuickBooksInstance.getVendorCredit.mockImplementation((_id: any, cb: any) =>
+        cb(null, {
+          Id: '42',
+          SyncToken: '2',
+          VendorRef: { value: 'vendor-9', name: 'Original Vendor' },
+          DocNumber: 'VC-9',
+          TxnDate: '2026-07-01',
+          GlobalTaxCalculation: 'TaxInclusive',
+          TxnTaxDetail: { TotalTax: 1.23 },
+          TotalAmt: 11.23,
+          Balance: 11.23,
+          MetaData: { CreateTime: 'x' },
+          Line: [{ Id: '1', Amount: 10, DetailType: 'AccountBasedExpenseLineDetail' }],
+        })
+      );
+      let captured: any;
+      mockQuickBooksInstance.updateVendorCredit.mockImplementation((payload: any, cb: any) => {
+        captured = payload;
+        cb(null, { Id: '42', SyncToken: '3' });
+      });
+
+      const result = await updateQuickbooksVendorCredit({
+        id: '42',
+        sync_token: '2',
+        line_items: [
+          { amount: 6698.22, account_ref: 'acc-accrued-liabilities', tax_code_ref: 'H', class_ref: 'class-7' },
+          { amount: 100, account_ref: 'acc-2' },
+        ],
+        global_tax_calculation: 'TaxExcluded',
+      });
+
+      expect(result.isError).toBe(false);
+      expect(captured.Id).toBe('42');
+      expect(captured.SyncToken).toBe('2'); // caller's token, not the fetched copy's
+      expect(captured.sparse).toBe(false); // full update
+      expect(captured.VendorRef).toEqual({ value: 'vendor-9', name: 'Original Vendor' }); // preserved
+      expect(captured.DocNumber).toBe('VC-9'); // preserved
+      expect(captured.TxnDate).toBe('2026-07-01'); // preserved
+      expect(captured.TxnTaxDetail).toBeUndefined(); // recomputed by QBO
+      expect(captured.TotalAmt).toBeUndefined(); // derived — stripped
+      expect(captured.MetaData).toBeUndefined(); // read-only — stripped
+      expect(captured.Line).toHaveLength(2);
+      expect(captured.Line[0].AccountBasedExpenseLineDetail.TaxCodeRef).toEqual({ value: 'H' });
+      expect(captured.Line[0].AccountBasedExpenseLineDetail.ClassRef).toEqual({ value: 'class-7' });
+      expect(captured.Line[1].AccountBasedExpenseLineDetail).toEqual({ AccountRef: { value: 'acc-2' } });
+      expect(captured.GlobalTaxCalculation).toBe('TaxExcluded'); // override wins over fetched TaxInclusive
+    });
+
+    it('should let vendor_ref override the fetched vendor on line replacement', async () => {
+      mockQuickBooksInstance.getVendorCredit.mockImplementation((_id: any, cb: any) =>
+        cb(null, { Id: '42', SyncToken: '2', VendorRef: { value: 'vendor-9' }, Line: [] })
+      );
+      let captured: any;
+      mockQuickBooksInstance.updateVendorCredit.mockImplementation((payload: any, cb: any) => {
+        captured = payload;
+        cb(null, {});
+      });
+
+      const result = await updateQuickbooksVendorCredit({
+        id: '42',
+        sync_token: '2',
+        vendor_ref: 'vendor-10',
+        private_note: 'swapped vendor',
+        line_items: [{ amount: 5, account_ref: 'acc-1' }],
+      });
+
+      expect(result.isError).toBe(false);
+      expect(captured.VendorRef).toEqual({ value: 'vendor-10' });
+      expect(captured.PrivateNote).toBe('swapped vendor');
+    });
+
+    it('should surface a read failure during line replacement', async () => {
+      mockQuickBooksInstance.getVendorCredit.mockImplementation((_id: any, cb: any) =>
+        cb(new Error('Not found'), null)
+      );
+
+      const result = await updateQuickbooksVendorCredit({
+        id: '404',
+        sync_token: '0',
+        line_items: [{ amount: 5, account_ref: 'acc-1' }],
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.error).toContain('Not found');
+    });
+
+    it('should not touch Line when line_items is omitted on update', async () => {
+      let captured: any;
+      mockQuickBooksInstance.updateVendorCredit.mockImplementation((payload: any, cb: any) => {
+        captured = payload;
+        cb(null, {});
+      });
+
+      const result = await updateQuickbooksVendorCredit({ id: '1', sync_token: '0', private_note: 'note only' });
+
+      expect(result.isError).toBe(false);
+      expect(captured.Line).toBeUndefined();
+      expect(captured.GlobalTaxCalculation).toBeUndefined();
     });
 
     it('should update a vendor credit - authentication error', async () => {
