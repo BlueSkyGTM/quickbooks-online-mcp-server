@@ -9,6 +9,7 @@ import { RegisterTool } from "./helpers/register-tool.js";
 import { ReadInvoiceTool } from "./tools/read-invoice.tool.js";
 import { SearchInvoicesTool } from "./tools/search-invoices.tool.js";
 import { UpdateInvoiceTool } from "./tools/update-invoice.tool.js";
+import { GetInvoicePdfTool } from "./tools/get-invoice-pdf.tool.js";
 import { CreateAccountTool } from "./tools/create-account.tool.js";
 import { UpdateAccountTool } from "./tools/update-account.tool.js";
 import { SearchAccountsTool } from "./tools/search-accounts.tool.js";
@@ -236,6 +237,9 @@ const main = async () => {
   // Add tool to update invoice
   RegisterTool(server, UpdateInvoiceTool);
   RegisterTool(server, DeleteInvoiceTool);
+
+  // Add tool to download invoice PDF
+  RegisterTool(server, GetInvoicePdfTool);
 
   // Chart of accounts tools
   RegisterTool(server, CreateAccountTool);
